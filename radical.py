@@ -52,4 +52,4 @@ class Radical:
 Radical._init()
 
 if __name__ == "__main__":
-    print(Radical.to_radical('赵'))
+    print(Radical.to_radical('葛'))
