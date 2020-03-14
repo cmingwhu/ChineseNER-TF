@@ -81,8 +81,8 @@ class BiLSTM_CRF(object):
             _word_embeddings = tf.Variable(self.embeddings, dtype=tf.float32, trainable=self.update_embedding,
                                            name="_word_embeddings")
             word_embeddings = tf.nn.embedding_lookup(params=_word_embeddings,
-                                                     ids = self.word_ids,
-                                                     name = "word_embeddings")
+                                                     ids=self.word_ids,
+                                                     name="word_embeddings")
         self.word_embeddings = tf.nn.dropout(word_embeddings, self.dropout_pl)
 
     def biLSTM_layer_op(self):
@@ -149,6 +149,7 @@ class BiLSTM_CRF(object):
             self.labels_softmax_ = tf.argmax(self.logits, axis=-1)
             self.labels_softmax_ = tf.cast(self.labels_softmax_, tf.int32)
 
+
     def trainstep_op(self):
         """
         //优化器设置
@@ -175,6 +176,7 @@ class BiLSTM_CRF(object):
             grads_and_vars_clip = [[tf.clip_by_value(g, -self.clip_grad, self.clip_grad), v]
                                    for g, v in grads_and_vars]
             self.train_op = optim.apply_gradients(grads_and_vars_clip, global_step=self.global_step)
+
 
     def init_op(self):
         self.init_op = tf.global_variables_initializer()

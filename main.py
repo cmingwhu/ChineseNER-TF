@@ -9,9 +9,10 @@ import tensorflow as tf
 import numpy as np
 import os, argparse, time, random
 from BiLSTM_CRF import BiLSTM_CRF
+from CNN_BiLSTM_CRF import CNN_BiLSTM_CRF
 from utils import str2bool, get_logger, get_entity
 from dataUtils import read_corpus, read_dictionary, tag2label_mapping, random_embedding, vocab_build, \
-    build_character_embeddings
+    build_pretrained_words_embeddings, char_embedding_matrix,read_sentences,char2id
 
 
 # Session configuration
@@ -23,39 +24,68 @@ config.gpu_options.per_process_gpu_memory_fraction = 0.3  # need ~700MB GPU memo
 
 
 # hyper parameters
-parser = argparse.ArgumentParser(description='BiLSTM-CRF for Chinese NER task')
-parser.add_argument('--dataset_name', type=str, default='CCKS17',
-                    help='choose a dataset(MSRA, ResumeNER, WeiboNER,人民日报)')
+parser = argparse.ArgumentParser(description='Chinese/English NER task')
+parser.add_argument('--dataset_name', type=str, default='Conll2003_NER',
+                    help='choose a dataset(Conll2003_NER,MSRA, ResumeNER, WeiboNER,人民日报)')
+parser.add_argument('--CE_Flag', type=str, default='0', help='Choose languages, 0:E,1:C!')
+parser.add_argument('--use_char', type=str, default='1', help='use char')
 # parser.add_argument('--train_data', type=str, default='data_path', help='train data source')
 # parser.add_argument('--test_data', type=str, default='data_path', help='test data source')
 parser.add_argument('--batch_size', type=int, default=10, help='#sample of each minibatch')
-parser.add_argument('--epoch', type=int, default=40, help='#epoch of training')
-parser.add_argument('--hidden_dim', type=int, default=300, help='#dim of hidden state')
+parser.add_argument('--epoch', type=int, default=50, help='#epoch of training')
+parser.add_argument('--hidden_dim', type=int, default=200, help='#dim of hidden state')
 parser.add_argument('--optimizer', type=str, default='Adam', help='Adam/Adadelta/Adagrad/RMSProp/Momentum/SGD')
 parser.add_argument('--CRF', type=str2bool, default=True, help='use CRF at the top layer. if False, use Softmax')
+parser.add_argument('--filter_num', type=int, default=30, help='number of convolution kenerls')
+parser.add_argument('--filter_sizes', type=int, default=3, help='Comma-separated filter sizes')
+parser.add_argument('--char_dim', type=int, default=30, help='char embedding dimension')
+parser.add_argument('--max_word', type=int, default=20, help='the max length of word in dataset')
 parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
 parser.add_argument('--clip', type=float, default=5.0, help='gradient clipping')
 parser.add_argument('--dropout', type=float, default=0.5, help='dropout keep_prob')
 parser.add_argument('--update_embedding', type=str2bool, default=True, help='update embedding during training')
 parser.add_argument('--use_pre_emb', type=str2bool, default=False,
                     help='use pre_trained char embedding or init it randomly')
-parser.add_argument('--pretrained_emb_path', type=str, default='sgns.wiki.char', help='pretrained embedding path')
-parser.add_argument('--embedding_dim', type=int, default=300, help='random init char embedding_dim')
-parser.add_argument('--shuffle', type=str2bool, default=True, help='shuffle training data before each epoch')
+parser.add_argument('--pretrained_emb_path', type=str, default='./sgns.wiki.char', help='pretrained embedding path')
+parser.add_argument('--embedding_dim', type=int, default=100, help='random init word embedding_dim')
+parser.add_argument('--shuffle', type=str2bool, default=False, help='shuffle training data before each epoch')
 parser.add_argument('--mode', type=str, default='train', help='train/test/demo')
-parser.add_argument('--demo_model', type=str, default='1583313347', help='model for test and demo')
+parser.add_argument('--demo_model', type=str, default='1584154467', help='model for test and demo')
 args = parser.parse_args()
+
+
+
+# read corpus and get training data
+if args.mode != 'demo':
+    train_path = os.path.join('data_path', args.dataset_name, 'train.txt')
+    test_path = os.path.join('data_path', args.dataset_name, 'test.txt')
+    # dev_path = os.path.join('data_path', args.dataset_name, 'valid.txt')
+    train_data = read_corpus(train_path)
+    test_data = read_corpus(test_path)
+    # dev_data = read_corpus(dev_path)
+
+    # English CNN_BiLSTM_CRF
+    if args.CE_Flag == '0':
+        train_sen, _ = read_sentences(train_path)
+        test_sen, _ = read_sentences(test_path)
+
+        # initializing char embedding
+        chars2ids, char_vocabulary, char_embedding = char_embedding_matrix(train_sen + test_sen, args.char_dim)
+
 
 
 # vocabulary build
 if not os.path.exists(os.path.join('data_path', args.dataset_name, 'word2id.pkl')):
     vocab_build(os.path.join('data_path', args.dataset_name, 'word2id.pkl'),
-                os.path.join('data_path', args.dataset_name, 'train_data.txt'))
+                os.path.join('data_path', args.dataset_name, 'train.txt'),os.path.join('data_path', args.dataset_name, 'test.txt'))
+
+# train_chars2ids  = char2id(chars2ids, char_vocabulary, train_sen, max_sentence, max_word)
+# test_chars2ids = char2id(chars2ids, char_vocabulary, test_sen, max_sentence, max_word)
 
 # get word dictionary
 word2id = read_dictionary(os.path.join('data_path', args.dataset_name, 'word2id.pkl'))
 
-# build char embeddings
+# build words embeddings
 if not args.use_pre_emb:
     embeddings = random_embedding(word2id, args.embedding_dim)
     log_pre = 'not_use_pretrained_embeddings'
@@ -63,7 +93,7 @@ else:
     pre_emb_path = os.path.join('.', args.pretrained_emb_path)
     embeddings_path = os.path.join('data_path', args.dataset_name, 'pretrain_embedding.npy')
     if not os.path.exists(embeddings_path):
-        build_character_embeddings(pre_emb_path, embeddings_path, word2id, args.embedding_dim)
+        build_pretrained_words_embeddings(pre_emb_path, embeddings_path, word2id, args.embedding_dim)
     embeddings = np.array(np.load(embeddings_path), dtype='float32')
     log_pre = 'use_pretrained_embeddings'
 
@@ -71,14 +101,7 @@ else:
 tag2label = tag2label_mapping[args.dataset_name]
 
 
-# read corpus and get training data
-if args.mode != 'demo':
-    train_path = os.path.join('data_path', args.dataset_name, 'train_data.txt')
-    test_path = os.path.join('data_path', args.dataset_name, 'test_data.txt')
-    dev_path = os.path.join('data_path', args.dataset_name, 'dev_data.txt')
-    train_data = read_corpus(train_path)
-    test_data = read_corpus(test_path)
-    dev_data = read_corpus(dev_path)
+
 
 # paths setting
 paths = {}
@@ -101,31 +124,42 @@ get_logger(log_path).info(str(args))
 
 # training model
 if args.mode == 'train':
-    model = BiLSTM_CRF(args, embeddings, tag2label, word2id, paths, config=config)
-    model.build_graph()
-
-    # hyperparameters-tuning, split train/dev
-    # dev_data = train_data[:5000]; dev_size = len(dev_data)
-    # train_data = train_data[5000:]; train_size = len(train_data)
-    # print("train data: {0}\ndev data: {1}".format(train_size, dev_size))
-    # model.train(train=train_data, dev=dev_data)
-
     # train model on the whole training data
     print("train data: {}".format(len(train_data)))
     print("test data: {}".format(len(test_data)))
-    print("dev data: {}".format(len(dev_data)))
-    model.train(train=train_data, dev=dev_data)  # use test_data.txt as the dev_data to see overfitting phenomena
+    # print("dev data: {}".format(len(dev_data)))
+
+    if args.use_char == '0':
+        model = BiLSTM_CRF(args, embeddings, tag2label, word2id, paths, config=config)
+        model.build_graph()
+
+        model.train(train=train_data, dev=test_data)  # use test_data.txt as the dev_data to see overfitting phenomena
+    elif args.use_char == '1':
+        model = CNN_BiLSTM_CRF(args, embeddings, char_embedding, tag2label, word2id, chars2ids, paths, config=config)
+        model.build_graph()
+
+        model.train(train=train_data, dev=test_data)  # use test_data.txt as the dev_data to see overfitting phenomena
+
 
 
 # testing model
 elif args.mode == 'test':
-    ckpt_file = tf.train.latest_checkpoint(model_path)
-    print(ckpt_file)
-    paths['model_path'] = ckpt_file
-    model = BiLSTM_CRF(args, embeddings, tag2label, word2id, paths, config=config)
-    model.build_graph()
-    print("test data: {}".format(len(test_data)))
-    model.test(test_data)
+    if args.use_char == '0':
+        ckpt_file = tf.train.latest_checkpoint(model_path)
+        print(ckpt_file)
+        paths['model_path'] = ckpt_file
+        model = BiLSTM_CRF(args, embeddings, tag2label, word2id, paths, config=config)
+        model.build_graph()
+        print("test data: {}".format(len(test_data)))
+        model.test(test_data)
+    elif args.use_char == '1':
+        ckpt_file = tf.train.latest_checkpoint(model_path)
+        print(ckpt_file)
+        paths['model_path'] = ckpt_file
+        model = CNN_BiLSTM_CRF(args, embeddings, char_embedding, tag2label, word2id, chars2ids, paths, config=config)
+        model.build_graph()
+        print("test data: {}".format(len(test_data)))
+        model.test(test_data)
 
 # demo
 elif args.mode == 'demo':
